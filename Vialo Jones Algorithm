@@ -1,0 +1,117 @@
+#Face Detectón by using Vialo Jones Algorithm
+import cv2
+import json
+import os
+import numpy as np
+
+def merge_overlapping_faces(faces, threshold=0.5):
+    """Aynı yüzün birden fazla tespit edilmesini engeller."""
+    merged_faces = []
+    for (x, y, w, h) in faces:
+        new_face = True
+        for (mx, my, mw, mh) in merged_faces:
+            # Intersection over Union (IoU) hesaplayarak çakışan yüzleri engelle
+            xx1, yy1 = max(x, mx), max(y, my)
+            xx2, yy2 = min(x + w, mx + mw), min(y + h, my + mh)
+            inter_area = max(0, xx2 - xx1) * max(0, yy2 - yy1)
+            union_area = w * h + mw * mh - inter_area
+            iou = inter_area / union_area if union_area > 0 else 0
+            if iou > threshold:
+                new_face = False
+                break
+        if new_face:
+            merged_faces.append((x, y, w, h))
+    return merged_faces
+
+face_cascades = [
+    cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'),
+    cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
+]
+
+json_path = "/content/drive/MyDrive/face_counts_val.json"
+image_folder = "/content/WIDER_val/WIDER_val/images/"
+output_folder = "/content/detected_faces_imagesSONBABA"
+
+os.makedirs(output_folder, exist_ok=True)
+
+try:
+    with open(json_path, "r", encoding="utf-8") as json_dosyasi:
+        ground_truth_data = json.load(json_dosyasi)
+except Exception as e:
+    print(f"❌ Hata: JSON dosyası okunamadı! {e}")
+    exit()
+
+total_TP, total_FP, total_FN = 0, 0, 0
+detected_faces_output = []
+total_processed_faces = 0
+
+for image_name, real_face_count in ground_truth_data.items():
+    image_path = os.path.join(image_folder, image_name)
+    if not os.path.exists(image_path):
+        print(f"❌ Hata: {image_path} bulunamadı, atlandı.")
+        continue
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"❌ Hata: {image_path} yüklenemedi, atlandı.")
+        continue
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces_detected = []
+
+    for cascade in face_cascades:
+        faces = cascade.detectMultiScale(gray, 1.1, 4)
+        for (x, y, w, h) in faces:
+            faces_detected.append((x, y, w, h))
+
+    merged_faces = merge_overlapping_faces(faces_detected)
+    detected_face_count = len(merged_faces)
+
+    TP = min(detected_face_count, real_face_count)
+    FP = max(detected_face_count - real_face_count, 0)
+    FN = max(real_face_count - detected_face_count, 0)
+
+    total_TP += TP
+    total_FP += FP
+    total_FN += FN
+    total_processed_faces += detected_face_count
+
+    detected_faces_output.append(f"{image_name}: {detected_face_count} yüz tespit edildi")
+
+    for (x, y, w, h) in merged_faces:
+        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    output_filename = f"detected_{image_name.replace(' ', '_')}.jpg"
+    output_path = os.path.join(output_folder, output_filename)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    try:
+        success = cv2.imwrite(output_path, img)
+        if not success:
+            print(f"❌ Hata: {output_path} kaydedilemedi!")
+    except Exception as e:
+        print(f"❌ Hata: {output_path} kaydedilirken hata oluştu! {e}")
+
+def calculate_metrics(TP, FP, FN):
+    precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+    recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    return precision, recall, f1_score
+
+precision, recall, f1_score = calculate_metrics(total_TP, total_FP, total_FN)
+
+print(f"\n📌 **YÜZ ALGILAMA METRİKLERİ**")
+print(f"Precision: {precision:.2f}")
+print(f"Recall: {recall:.2f}")
+print(f"F1 Score: {f1_score:.2f}")
+print(f"Toplam İşlenen Yüz Sayısı: {total_processed_faces}")
+
+try:
+    with open("detected_faces.txt", "w", encoding="utf-8") as dosya:
+        dosya.write("\n".join(detected_faces_output))
+    print("✅ detected_faces.txt başarıyla kaydedildi.")
+except Exception as e:
+    print(f"❌ Hata: detected_faces.txt kaydedilemedi! {e}")
+
+confusion_matrix = np.array([[total_TP, total_FP], [total_FN, 0]])
+print("\nConfusion Matrix:")
+print(confusion_matrix)
